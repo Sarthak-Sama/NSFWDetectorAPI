@@ -4,6 +4,7 @@ const tf = require("@tensorflow/tfjs-node");
 const nsfw = require("nsfwjs");
 const path = require("path");
 const fs = require("fs");
+const sharp = require("sharp");
 const ffmpeg = require("fluent-ffmpeg");
 const workerpool = require("workerpool");
 const rateLimit = require("express-rate-limit");
@@ -12,7 +13,6 @@ let pLimit;
 (async () => {
   pLimit = (await import("p-limit")).default;
 
-  // Initialize the model at server startup
   console.log("Loading NSFW model...");
   const model = await nsfw.load();
   console.log("NSFW model loaded");
@@ -21,17 +21,14 @@ let pLimit;
   const PORT = 5000;
   const pool = workerpool.pool(__dirname + "/tf-worker.js");
 
-  // Configure Multer for file uploads
   const upload = multer({ dest: "uploads/" });
 
-  // Rate limiter
   const limiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
     max: 20, // Limit each IP to 20 requests per window
   });
   app.use(limiter);
 
-  // Utility to extract frames from a video
   async function extractFrames(videoPath, outputDir, frameRate = 1) {
     return new Promise((resolve, reject) => {
       fs.mkdirSync(outputDir, { recursive: true });
@@ -48,12 +45,29 @@ let pLimit;
     });
   }
 
-  // Function to process multiple images
+  async function resizeImage(filePath, maxWidth = 800, maxHeight = 800) {
+    const dir = path.dirname(filePath);
+    const ext = path.extname(filePath);
+    const baseName = path.basename(filePath, ext);
+    const resizedPath = path.join(dir, `${baseName}_resized${ext}`);
+
+    await sharp(filePath)
+      .resize({ width: maxWidth, height: maxHeight, fit: "inside" })
+      .toFile(resizedPath);
+
+    return resizedPath;
+  }
+
+  async function resizeFrame(filePath, maxWidth = 800, maxHeight = 800) {
+    return await resizeImage(filePath, maxWidth, maxHeight);
+  }
+
   async function processImages(files) {
     try {
       const results = await Promise.all(
         files.map(async (file) => {
-          const imageBuffer = fs.readFileSync(file.path);
+          const resizedPath = await resizeImage(file.path);
+          const imageBuffer = fs.readFileSync(resizedPath);
           const imageTensor = tf.node.decodeImage(imageBuffer);
 
           try {
@@ -75,18 +89,20 @@ let pLimit;
               probability: pornPrediction ? pornPrediction.probability : 0,
             };
           } finally {
-            imageTensor.dispose(); // Dispose of the tensor to free memory
+            imageTensor.dispose();
+            fs.unlinkSync(file.path);
+            fs.unlinkSync(resizedPath);
           }
         })
       );
 
       return results;
-    } finally {
-      files.forEach((file) => fs.unlinkSync(file.path)); // Clean up the uploaded files
+    } catch (error) {
+      files.forEach((file) => fs.unlinkSync(file.path));
+      throw error;
     }
   }
 
-  // Process video frames
   async function processVideo(file) {
     const framesDir = path.join(
       "uploads",
@@ -94,13 +110,14 @@ let pLimit;
     );
 
     try {
-      const framePaths = await extractFrames(file.path, framesDir, 1); // 1 frame/sec
-      const limit = pLimit(5); // Limit concurrent operations to 5
+      const framePaths = await extractFrames(file.path, framesDir, 1);
+      const limit = pLimit(5);
 
       const results = await Promise.all(
         framePaths.map((framePath) =>
           limit(async () => {
-            const frameBuffer = fs.readFileSync(framePath);
+            const resizedPath = await resizeFrame(framePath);
+            const frameBuffer = fs.readFileSync(resizedPath);
             const frameTensor = tf.node.decodeImage(frameBuffer);
 
             try {
@@ -111,6 +128,7 @@ let pLimit;
               return pornPrediction && pornPrediction.probability > 0.5;
             } finally {
               frameTensor.dispose();
+              fs.unlinkSync(resizedPath);
               fs.unlinkSync(framePath);
             }
           })
@@ -128,7 +146,6 @@ let pLimit;
     }
   }
 
-  // Endpoint for detecting NSFW content
   app.post("/detect", upload.array("files", 5), async (req, res) => {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
@@ -172,7 +189,6 @@ let pLimit;
     }
   });
 
-  // Start the server only after model is loaded
   app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
   });
