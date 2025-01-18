@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: NSFWDetectionAPI
+    env: node # Specify the environment you are using (node, python, etc.)
+    buildCommand: |
+      apt-get update && apt-get install -y ffmpeg  # Install FFmpeg
+      npm install  # Adjust if you're using a different package manager
+startCommand: |
+  ffmpeg -version  # Verify FFmpeg installation
+  npm start  # Your original start command
