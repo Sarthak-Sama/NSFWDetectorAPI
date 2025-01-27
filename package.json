@@ -3,11 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "server.js",
- "scripts": {
-    "install": "npm install", 
-    "build": "npm run build",
-    "start": "npm start"
-  },
+  "scripts": {},
   "keywords": [],
   "author": "",
   "license": "ISC",
