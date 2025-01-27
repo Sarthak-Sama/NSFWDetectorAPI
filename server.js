@@ -6,6 +6,8 @@ const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
 const ffmpeg = require("fluent-ffmpeg");
+const ffmpegPath = "./ffmpeg/ffmpeg-7.0.2-amd64-static/ffmpeg";
+ffmpeg.setFfmpegPath(ffmpegPath);
 const workerpool = require("workerpool");
 const rateLimit = require("express-rate-limit");
 let pLimit;
@@ -34,12 +36,19 @@ let pLimit;
       fs.mkdirSync(outputDir, { recursive: true });
       ffmpeg(videoPath)
         .outputOptions([`-vf fps=${frameRate}`])
-        .on("end", () =>
+        .on("end", () => {
+          console.log("Frame extraction complete.");
           resolve(
             fs.readdirSync(outputDir).map((file) => path.join(outputDir, file))
-          )
-        )
-        .on("error", (err) => reject(err))
+          );
+        })
+        .on("stderr", (stderrLine) => {
+          console.log(`FFmpeg stderr: ${stderrLine}`);
+        })
+        .on("error", (err) => {
+          console.log(`FFmpeg error: ${err.message}`);
+          reject(err);
+        })
         .output(`${outputDir}/frame-%04d.jpg`)
         .run();
     });
